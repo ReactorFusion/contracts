@@ -15,6 +15,7 @@ import "../CToken.sol";
 import "../CErc20.sol";
 import "../interfaces/IRouter.sol";
 import "../interfaces/IPair.sol";
+import "../interfaces/IWETH.sol";
 import "./ES33.sol";
 
 interface IBribe {
@@ -56,7 +57,12 @@ contract RewardDistributor is OwnableUpgradeable, ReentrancyGuardUpgradeable {
     Ledger weights;
     mapping(bytes32 => Ledger) assetLedgers;
     mapping(address => uint256) accruedInterest;
+    uint256 supposedBalance; // unused. included for historical reasons
 
+    uint256 public lastReap;
+    uint256 public lastGaugeClaim;
+    uint256 public duration;
+    uint256 public swappedRF;
     event Harvest(address addr, uint256 amount);
 
     function initialize(
@@ -163,7 +169,9 @@ contract RewardDistributor is OwnableUpgradeable, ReentrancyGuardUpgradeable {
         return harvested;
     }
 
-    function harvest(bytes32[] memory ledgerIds) external returns (uint256) {
+    function harvest(
+        bytes32[] memory ledgerIds
+    ) external nonReentrant returns (uint256) {
         _harvest(msg.sender, ledgerIds);
         uint256 amount = accruedInterest[msg.sender];
         accruedInterest[msg.sender] = 0;
@@ -172,13 +180,11 @@ contract RewardDistributor is OwnableUpgradeable, ReentrancyGuardUpgradeable {
         return amount;
     }
 
-    function updateRewards(bytes32[] memory ledgerIds) internal {
-        underlying.mintEmission();
-        uint256 delta = underlying.balanceOf(address(this)) -
-            weights.rewardsLeft(slot(address(underlying)));
-
-        if (delta == 0) return;
-        weights.reward(slot(address(underlying)), delta);
+    function updateRewards(bytes32[] memory ledgerIds) public {
+        uint256 delta = underlying.mintEmission();
+        if (delta != 0) {
+            weights.reward(slot(address(underlying)), delta);
+        }
 
         for (uint256 j = 0; j < ledgerIds.length; j++) {
             if (ledgerIds[j] != BRIBE_ACCOUNT) {
@@ -221,66 +227,73 @@ contract RewardDistributor is OwnableUpgradeable, ReentrancyGuardUpgradeable {
         return slot(cToken, bytes32("SUPPLY"));
     }
 
-    uint256 lastReap = 0;
+    function reset() external onlyOwner {
+        lastGaugeClaim = block.timestamp - 10 minutes - 1;
+        duration = 10 minutes;
+    }
 
     function reap() public nonReentrant returns (uint256, uint256) {
         if (lastReap == block.timestamp) return (0, 0);
-        lastReap = block.timestamp;
+        IERC20 usdc = IERC20(0x3355df6D4c9C3035724Fd0e3914dE96A5a83aaf4);
+        CToken ceth = CToken(0xC5db68F30D21cBe0C9Eac7BE5eA83468d69297e6);
+        CToken cusdc = CToken(0x04e9Db37d8EA0760072e1aCE3F2A219988Fdac29);
+        IPair ethrf = IPair(0x62eB02CB53673b5855f2C0Ea4B8fE198901F34Ac);
+        IPair usdceth = IPair(0xcD52cbc975fbB802F82A1F92112b1250b5a997Df);
+        uint256 vc_delta;
+        uint256 vcBal = vc.balanceOf(address(this));
+        uint256 rf_delta;
 
-        address[] memory cts = comptroller.getAllMarkets();
-        route[] memory routes = new route[](2);
-        routes[0] = route(address(underlying), weth, false);
-        routes[1] = route(weth, address(underlying), false);
+        if (block.timestamp - lastGaugeClaim >= duration) {
+            rf_delta += swappedRF;
+            swappedRF = 0;
+            ceth.takeReserves();
+            cusdc.takeReserves();
+            uint256 wethTotal = 0;
+            uint256 usdcbal = usdc.balanceOf(address(this));
+            uint256 usdcWethOut = usdceth.getAmountOut(usdcbal, address(usdc));
+            if (usdcWethOut > 0) {
+                usdc.transfer(address(usdceth), usdcbal);
+                usdceth.swap(0, usdcWethOut, address(ethrf), "");
+                wethTotal += usdcWethOut;
+            }
+            uint256 ethbal = address(this).balance;
+            IWETH(weth).deposit{value: ethbal}();
+            IWETH(weth).transfer(address(ethrf), ethbal);
+            wethTotal += ethbal;
+            uint256 rfOut = ethrf.getAmountOut(wethTotal, address(weth));
+            if (rfOut > 0) {
+                ethrf.swap(0, rfOut, address(this), "");
+            }
+            swappedRF = rfOut;
+            address[] memory b = new address[](1);
+            b[0] = address(vc);
 
-        route[] memory routes2 = new route[](1);
-        routes2[0] = route(weth, address(underlying), false);
-        uint256 balance_before = underlying.balanceOf(address(this));
-        for (uint256 i = 0; i < cts.length; i++) {
-            CErc20 ct = CErc20(cts[i]);
-            ct.takeReserves();
-            if (address(ct) == address(cEther)) {
-                if (address(this).balance > 0) {
-                    router.swapExactETHForTokens{value: address(this).balance}(
-                        0,
-                        routes2,
-                        address(this),
-                        block.timestamp
-                    );
-                }
+            vc_delta += vcBal;
+
+            gauge.getReward(address(this), b);
+            vcBal = vc.balanceOf(address(this)) - vcBal;
+            lastReap = lastGaugeClaim + duration;
+            lastGaugeClaim = block.timestamp;
+
+            duration = Math.min(1 days, (duration * 15) / 10);
+        }
+        if (lastGaugeClaim + duration > lastReap) {
+            vc_delta +=
+                (vcBal * (block.timestamp - lastReap)) /
+                (lastGaugeClaim + duration - lastReap);
+            uint256 rf_delta_new = (swappedRF * (block.timestamp - lastReap)) /
+                (lastGaugeClaim + duration - lastReap);
+            rf_delta += rf_delta_new;
+            if (rf_delta_new <= swappedRF) {
+                swappedRF -= rf_delta_new;
             } else {
-                address ctUnderlying = ct.underlying();
-
-                if (ctUnderlying == address(underlying)) {
-                    continue;
-                }
-                routes[0].from = ctUnderlying;
-                uint256 bal = IERC20(ctUnderlying).balanceOf(address(this));
-                if (bal > 0) {
-                    IERC20(ctUnderlying).approve(address(router), bal);
-                    router.swapExactTokensForTokens(
-                        bal,
-                        0,
-                        routes,
-                        address(this),
-                        block.timestamp
-                    );
-                }
+                swappedRF = 0;
             }
         }
-
-        uint256 underlying_delta = underlying.balanceOf(address(this)) -
-            balance_before;
-        address[] memory b = new address[](1);
-        b[0] = address(vc);
-
-        gauge.getReward(address(this), b);
-        uint256 vc_delta = vc.balanceOf(address(this));
-
-        if (underlying_delta > 0)
-            underlying.transfer(address(underlying), underlying_delta);
-
+        lastReap = block.timestamp;
         if (vc_delta > 0) vc.transfer(address(underlying), vc_delta);
-        return (underlying_delta, vc_delta);
+        if (rf_delta > 0) underlying.transfer(address(underlying), rf_delta);
+        return (rf_delta, vc_delta);
     }
 
     receive() external payable {}

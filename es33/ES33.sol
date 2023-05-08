@@ -46,7 +46,7 @@ contract ES33 is
     address distributor;
 
     uint256 public maxSupply;
-    uint256 decay; // 1 - (emission per second / (maxSupply - totalSupply)), multiplied by (2 ** 255). 57896042684701707603950063082982247554356520909397671010228685989891010066985 for 2% decay per week
+    uint256 decay; // 1 - (emission per second / (maxSupply - totalSupply)), multiplied by (2 ** 128).
     uint256 unstakingTime;
     uint256 protocolFeeRate;
 
@@ -102,7 +102,7 @@ contract ES33 is
         distributor = distributor_;
     }
 
-    function mintEmission() public returns (uint256) {
+    function _mintEmission() internal returns (uint256) {
         if (block.timestamp <= lastMint) {
             return 0;
         }
@@ -116,6 +116,11 @@ contract ES33 is
         lastMint = block.timestamp;
         _mint(distributor, emission);
         return emission;
+    }
+
+    function mintEmission() external returns (uint256) {
+        require(msg.sender == address(distributor));
+        return _mintEmission();
     }
 
     function circulatingSupply() public view returns (uint256) {
@@ -221,22 +226,6 @@ contract ES33 is
         return _harvest(msg.sender, reap);
     }
 
-    //--- view functions
-    function stakedBalanceOf(address acc) external view returns (uint256) {
-        return staked.balances[slot(acc)];
-    }
-
-    function unstakingBalanceOf(address acc) external view returns (uint256) {
-        return unstaking.balances[slot(acc)];
-    }
-
-    function emissionRate() external returns (uint256) {
-        mintEmission();
-
-        return
-            Math.mulDiv(maxSupply - totalSupply(), 2 ** 128 - decay, 2 ** 128);
-    }
-
     function _beforeTokenTransfer(
         address from,
         address to,
@@ -246,6 +235,25 @@ contract ES33 is
             block.timestamp >= tradeStart || from == owner() || to == owner(),
             "trading not started yet."
         );
+    }
+
+    //--- view functions
+    function stakedBalanceOf(address acc) external view returns (uint256) {
+        return staked.balances[slot(acc)];
+    }
+
+    function unstakingBalanceOf(address acc) external view returns (uint256) {
+        return unstaking.balances[slot(acc)];
+    }
+
+    function emissionRate() external view returns (uint256) {
+        uint256 decayed = 2 ** 128 -
+            RPow.rpow(decay, block.timestamp - lastMint, 2 ** 128);
+        uint256 mintable = maxSupply - totalSupply();
+
+        uint256 emission = Math.mulDiv(mintable, decayed, 2 ** 128);
+
+        return Math.mulDiv(mintable - emission, 2 ** 128 - decay, 2 ** 128);
     }
 
     function rewardRate() external returns (uint256, uint256) {
