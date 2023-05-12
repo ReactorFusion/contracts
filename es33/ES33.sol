@@ -191,30 +191,36 @@ contract ES33 is
         address addr,
         bool reap
     ) internal returns (uint256[] memory) {
-        if (reap) {
-            IRewardDistributor(distributor).reap();
-        }
         address[] memory tokens = rewardTokens.values();
-
+        uint256[] memory deltas = new uint256[](tokens.length);
         uint256[] memory amounts = new uint256[](tokens.length);
-
-        for (uint256 i = 0; i < tokens.length; i++) {
-            uint256 delta = IERC20(tokens[i]).balanceOf(address(this)) -
-                staked.rewardsLeft(slot(tokens[i]));
-            uint256 protocolFee = (delta * protocolFeeRate) / 1e18;
-            accruedProtocolFee[IERC20(tokens[i])] += protocolFee;
-
-            staked.reward(slot(tokens[i]), delta - protocolFee);
-
-            if (addr == address(0)) {
-                continue;
+        if (reap) {
+            for (uint256 i = 0; i < tokens.length; i++) {
+                deltas[i] = IERC20(tokens[i]).balanceOf(address(this));
             }
-            uint256 harvested = staked.harvest(slot(addr), slot(tokens[i]));
-            amounts[i] = harvested;
+            IRewardDistributor(distributor).reap();
+            for (uint256 i = 0; i < tokens.length; i++) {
+                deltas[i] =
+                    IERC20(tokens[i]).balanceOf(address(this)) -
+                    deltas[i];
 
-            if (harvested > 0) {
-                emit Harvest(addr, harvested);
-                IERC20(tokens[i]).safeTransfer(addr, harvested);
+                uint256 delta = deltas[i];
+                uint256 protocolFee = (delta * protocolFeeRate) / 1e18;
+                accruedProtocolFee[IERC20(tokens[i])] += protocolFee;
+
+                staked.reward(slot(tokens[i]), delta - protocolFee);
+            }
+        }
+
+        if (addr != address(0)) {
+            for (uint256 i = 0; i < tokens.length; i++) {
+                uint256 harvested = staked.harvest(slot(addr), slot(tokens[i]));
+                amounts[i] = harvested;
+
+                if (harvested > 0) {
+                    emit Harvest(addr, harvested);
+                    IERC20(tokens[i]).safeTransfer(addr, harvested);
+                }
             }
         }
         return amounts;
