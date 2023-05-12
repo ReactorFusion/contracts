@@ -234,6 +234,8 @@ contract RewardDistributor is OwnableUpgradeable, ReentrancyGuardUpgradeable {
 
     function reap() public nonReentrant returns (uint256, uint256) {
         if (lastReap == block.timestamp) return (0, 0);
+        require(msg.sender == address(underlying), "only underlying");
+        // hardcoded to save gas
         IERC20 usdc = IERC20(0x3355df6D4c9C3035724Fd0e3914dE96A5a83aaf4);
         CToken ceth = CToken(0xC5db68F30D21cBe0C9Eac7BE5eA83468d69297e6);
         CToken cusdc = CToken(0x04e9Db37d8EA0760072e1aCE3F2A219988Fdac29);
