@@ -22,7 +22,6 @@ contract SimplePriceOracle is PriceOracle {
     function getUnderlyingPrice(
         CToken cToken
     ) public view override returns (uint) {
-        return 10000;
         PythStructs.Price memory price = _getPrice(cToken);
         require(price.expo >= -18, "price too precise");
         return (uint256(uint64(price.price)) *
