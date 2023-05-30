@@ -249,22 +249,7 @@ abstract contract CToken is
             exchangeRateStoredInternal()
         );
     }
-
-    function getSnapshots(
-        address[] calldata accounts
-    ) external view returns (uint256[2][] memory) {
-        uint256[2][] memory ret = new uint256[2][](accounts.length);
-        for (uint256 i = 0; i < accounts.length; i++) {
-            address acc = accounts[i];
-            ret[i][0] = accountTokens[acc];
-            ret[i][1] = accountBorrows[acc].interestIndex == 0
-                ? 0
-                : ((accountBorrows[acc].principal * 1e18) /
-                    accountBorrows[acc].interestIndex);
-        }
-        return ret;
-    }
-
+    
     function getStaticBalance(
         address acc
     ) external view returns (uint256, uint256) {
