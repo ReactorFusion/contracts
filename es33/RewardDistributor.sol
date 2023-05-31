@@ -253,6 +253,7 @@ contract RewardDistributor is OwnableUpgradeable, ReentrancyGuardUpgradeable {
             uint256 wethTotal = 0;
             uint256 usdcbal = usdc.balanceOf(address(this));
             uint256 usdcWethOut = usdceth.getAmountOut(usdcbal, address(usdc));
+            require (usdcWethOut * 100 >= 90 * usdceth.current(address(usdc), usdcbal));
             if (usdcWethOut > 0) {
                 usdc.transfer(address(usdceth), usdcbal);
                 usdceth.swap(0, usdcWethOut, address(ethrf), "");
@@ -263,6 +264,7 @@ contract RewardDistributor is OwnableUpgradeable, ReentrancyGuardUpgradeable {
             IWETH(weth).transfer(address(ethrf), ethbal);
             wethTotal += ethbal;
             uint256 rfOut = ethrf.getAmountOut(wethTotal, address(weth));
+            require (rfOut * 100 >= 90 * ethrf.current(address(weth), wethTotal));
             if (rfOut > 0) {
                 ethrf.swap(0, rfOut, address(this), "");
             }
