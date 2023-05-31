@@ -55,4 +55,8 @@ interface IPair {
         returns (uint _reserve0, uint _reserve1, uint _blockTimestampLast);
 
     function getAmountOut(uint, address) external view returns (uint);
+    function current(
+        address tokenIn,
+        uint amountIn
+    ) external view returns (uint amountOut);
 }
